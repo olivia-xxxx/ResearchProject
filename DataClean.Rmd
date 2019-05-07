@@ -1,6 +1,6 @@
 ---
-title: "chen-wc475-clean"
-author: "Wen Chen"
+title: "DataClean"
+author: "Olivia"
 date: "2019/4/22"
 output: html_document
 ---
