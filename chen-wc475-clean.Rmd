@@ -1,0 +1,239 @@
+---
+title: "chen-wc475-clean"
+author: "Wen Chen"
+date: "2019/4/22"
+output: html_document
+---
+# Final Project
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(quantmod)
+library(tidyverse)
+library(rvest)
+library(dplyr)
+library(magrittr)
+library(stringr)
+#library(RSocrata)
+library(httr)
+library(curl)
+library(jsonlite)
+library(tidytext)
+library(readxl)
+library(zoo)
+#library(tidycensus)
+library(tidyqwi)
+library(choroplethr)
+library(choroplethrMaps)
+#library(shiny)
+library(lubridate)
+
+
+
+
+
+
+```
+
+
+## 
+
+
+#### (a) 
+
+```{r geo, echo=FALSE}
+#rawMappingGeo <- read.csv("https://lehd.ces.census.gov/data/schema/latest/label_geography.csv")
+rawMappingGeo <- read.csv("uscitiesv1.5.csv")
+dataMappingGeo <- rawMappingGeo %>%
+  select(city,city_ascii,state_id,state_name,county_fips,county_name,lat,lng,population )
+
+write.csv(dataMappingGeo, "dataMappingGeo.csv")
+```
+
+
+
+```{r averageRent, echo=FALSE}
+# Rent Jungle - Average Rent Trend
+# Get all city option
+urlRentOption <- "https://www.rentjungle.com/rentdata/"
+rawOption <- urlRentOption  %>% read_html() %>% html_nodes("form") %>% html_nodes("select") %>%
+  html_nodes("option") %>%html_text()  
+
+
+cityOption <- tibble(Cobo = rawOption) %>%separate(Cobo, c("City","State"), sep = ", ") %>% drop_na()
+stringOption <- tolower(cityOption$City) %>% str_replace_all(" ", "-") %>% str_replace_all("\\.", "")
+numOption<- length(stringOption)
+
+
+#cityOption <-  dataMappingGeo %>% filter(population > 100000 ) %>% drop_na()
+#stringOption <- tolower(cityOption$city_ascii) %>% str_replace_all(" ", "-") %>% str_replace_all("\\.", "")
+#numOption<- length(stringOption)
+
+
+dataRJCityRent <- tibble(State = character(), City = character(), Month = numeric(), Year = numeric(),
+                           AllBeds = numeric(), OneBed = numeric(), TwoBeds = numeric())
+
+
+# Get historical average rent for every city in the option 
+for (i in 1:numOption){
+  urlAverageRent <- "https://www.rentjungle.com/average-rent-in-*-rent-trends/" %>% 
+    str_replace_all("\\*", stringOption[i] ) 
+  rawScript<- urlAverageRent  %>% read_html() %>% html_nodes("div.content")  %>% html_nodes("script") %>% 
+    html_text(trim = TRUE)%>%.[2] %>% str_extract_all("(?<=data=).*(?=,ndata)") %>% unlist()
+ 
+  rawRentTable <- rawScript %>% str_extract_all("(?<=[[^:digit:]])(\\d+)(?=[[^:digit:]])") %>% unlist() %>% 
+    as.numeric() %>% matrix(ncol = 5, byrow = TRUE) 
+  colnames(rawRentTable) <- c("Month","Year","AllBeds","OneBed","TwoBeds")
+  dataRJCityRent <- rawRentTable %>% as_tibble() %>% mutate(State = cityOption$State[i], City = cityOption$City[i]) %>%
+    bind_rows(dataRJCityRent)
+}
+
+
+
+dataRJCityRent <- dataRJCityRent %>% filter(State %in% unique(dataMappingGeo$state_id)) %>% 
+  mutate(Date = as.Date(paste(Year,Month,"01",sep = "-")))
+
+
+
+write.csv(dataRJCityRent, "dataRJCityRent.csv")
+
+
+```
+
+```{r apartment list, echo=FALSE}
+# Apartment List - Rental Prices
+# City Level
+rawALCity <- read.csv("Apartment-List-Rent-Data-City_2019-4.csv")
+rawALCity <- rawALCity %>% mutate(City = str_extract(Location, ".*(?=, )") )
+nameColALCity <- colnames(rawALCity)
+indexColALCity <- str_detect(nameColALCity, "Price")
+colnames(rawALCity) <- nameColALCity %>% str_replace_all("Price_","")
+nameColALCity <- colnames(rawALCity)
+
+dataALCityRent <- rawALCity %>% gather(nameColALCity[indexColALCity], key = "Date", value = "Price") %>% separate(Date, c("Year","Month"), sep = "_") %>% spread(Bedroom_Size, Price) 
+# Add the Date
+dataALCityRent <- dataALCityRent %>% mutate(Date = as.Date(paste(Year,Month,"01",sep = "-")))
+
+write.csv(dataALCityRent,"dataALCityRent.csv")
+
+# State Level
+rawALState <- read.csv("Apartment-List-Rent-Data-State_2019-4.csv")
+nameColALState <- colnames(rawALState)
+indexColALState <- str_detect(nameColALState, "Price")
+colnames(rawALState) <- nameColALState %>% str_replace_all("Price_","")
+nameColALState <- colnames(rawALState)
+
+dataALStateRent <- rawALState %>% gather(nameColALState[indexColALState], key = "Date", value = "Price") %>% separate(Date, c("Year","Month"), sep = "_") %>% spread(Bedroom_Size, Price) 
+# Add the Date
+dataALStateRent <- dataALStateRent %>% mutate(Date = as.Date(paste(Year,Month,"01",sep = "-")))
+
+write.csv(dataALStateRent,"dataALStateRent.csv")
+
+```
+
+
+```{r finance, echo=FALSE}
+# SP500 & CBOE Interest Rate 10 Year T No 
+start <- as.Date("2010-01-01")
+end <- as.Date("2019-05-01")
+# SP500
+sp500 <- na.fill(getSymbols("^GSPC", auto.assign = FALSE, src = "yahoo", from =start, to = end), "extend")
+# convert xts to dataframe
+sp500 <- data.frame(Date=index(sp500), coredata(sp500))
+
+# 10yrs Interest Rate
+t10yr <- na.fill(getSymbols("^TNX", auto.assign = FALSE, src = "yahoo", from =start, to = end), "extend")
+# convert xts to dataframe
+t10yr <- data.frame(Date=index(t10yr), coredata(t10yr))
+
+dataFinance<- sp500 %>% select(Date,`GSPC.Adjusted`) %>% inner_join(t10yr, by = "Date") %>% select(Date,`GSPC.Adjusted`,`TNX.Adjusted`)
+colnames(dataFinance) <- c("Date","SP500","InterestRate")
+
+
+
+write.csv(dataFinance,"dataFinance.csv")
+
+```
+
+
+```{r home price index, echo=FALSE}
+# S&P CoreLogic Case-Shiller Home Price Indices
+#https://fred.stlouisfed.org/series/CSUSHPINSA
+
+dataHomePriceIndex <- read.csv("CSUSHPINSA.csv")
+dataHomePriceIndex$DATE <- as.Date(dataHomePriceIndex$DATE)
+colnames(dataHomePriceIndex) <- c("Date","HomePriceIndex")
+dataHomePriceIndex <- dataHomePriceIndex %>% filter(Date >= as.Date("2010-01-01"))
+write.csv(dataHomePriceIndex,"dataHomePriceIndex.csv")
+
+#dataHomePriceIndex %>% filter(Date >= as.Date("2010-01-01")) %>% 
+#  ggplot(mapping = aes(x = Date, y = HomePriceIndex, group =1)) + 
+#  geom_line() + geom_title("National Home Price Index")
+
+```
+
+```{r crime, echo = FALSE}
+# Crime Information From FBI
+# https://ucr.fbi.gov/crime-in-the-u.s
+
+rawCrimeData <- data.frame()
+  
+for (yearIndex in 2011:2017){
+  nameCrimeXls <- paste("Offenses_",yearIndex,".xls", sep = "")
+  rawCrimeSheet <- read_excel(nameCrimeXls, skip = 3) 
+  indexRapeCol <- str_detect(tolower(colnames(rawCrimeSheet)),"rape|\\.\\.\\.")
+  rawCrimeSheet[,indexRapeCol][is.na(rawCrimeSheet[,indexRapeCol])]<-0
+
+  
+  rawCrimeSheet<- rawCrimeSheet %>% 
+    mutate(Year = yearIndex, Rape = rowSums(.[colnames(rawCrimeSheet)[indexRapeCol]])) %>%
+    select(c("Year", colnames(rawCrimeSheet)[!indexRapeCol],"Rape"))
+
+  colnames(rawCrimeSheet) <- colnames(rawCrimeSheet) %>% str_replace_all("\n"," ") %>%
+    str_replace_all("\\d","")
+  rawCrimeData <- rbind(rawCrimeData,rawCrimeSheet)
+  
+} 
+
+rawCrimeData$State<- rawCrimeData$State %>% str_replace_all("\\d","")
+rawCrimeData$State <- rawCrimeData$State %>% na.locf() %>% tolower()
+rawCrimeData$City<- rawCrimeData$City %>% str_replace_all("\\d","")
+dataCrime <- rawCrimeData[complete.cases(rawCrimeData$City), ]
+dataCrime[is.na(dataCrime)] <- 0
+colnames(dataCrime) <- c("Year","State","City","Population","ViolentCrime","Murder","Robbery",
+         "AggravatedAssault","PropertyCrime","Burglary","LarcenyTheft","MotorVehicleTheft","Arson","Rape")
+write.csv(dataCrime, "dataCrime.csv")
+
+
+#Shinny Select
+#dataCrime %>%filter(Year == 2011) %>% select(State, Population, `Violent crime`) %>% group_by(State) %>%
+#  summarise(Pop = sum(Population), VioCrime = sum(`Violent crime`) , Ratio = 100 * sum(`Violent #crime`)/sum(Population)) %>%
+#  select(region = State, value = Pop) %>%
+#  state_choropleth()
+
+
+```
+
+
+```{r qwi, echo = FALSE}
+# Quarterly Workforce Indicators (QWI)
+census_key = "5065d0c5c9218157d3b82ab59b1a35602e8e1e4f"
+
+#Average Monthly Earnings
+#Total Quarterly Payroll
+dataEarning <- get_qwi(years = as.character(2010:2019),
+                   geography = "county",
+               states = state_info$state_fips,
+                   apikey =  census_key,
+                   variables = c("EarnS", "Payroll"), all_groups = TRUE,
+                   industry_level = "A", processing = "sequential")
+
+
+write.csv(dataEarning, "dataEarning.csv")
+
+
+#https://simplemaps.com/data/us-cities
+
+
+```

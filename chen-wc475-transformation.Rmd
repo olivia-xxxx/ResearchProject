@@ -1,0 +1,201 @@
+---
+title: "chen-wc475-transformation"
+author: "Wen Chen"
+date: "May 5, 2019"
+output: html_document
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(quantmod)
+library(tidyverse)
+library(rvest)
+library(dplyr)
+library(magrittr)
+library(stringr)
+#library(RSocrata)
+library(httr)
+library(curl)
+library(jsonlite)
+library(tidytext)
+library(readxl)
+library(zoo)
+#library(tidycensus)
+library(tidyqwi)
+library(choroplethr)
+library(choroplethrMaps)
+#library(shiny)
+library(lubridate)
+
+
+
+```
+
+
+
+```{r import, echo=FALSE}
+dataMappingGeo <- read.csv("dataMappingGeo.csv",stringsAsFactors=FALSE)
+dataMappingGeo$county_fips<- formatC(dataMappingGeo$county_fips, width=5, flag="0") #add leading zero
+dataRJCityRent <- read.csv("dataRJCityRent.csv",stringsAsFactors=FALSE)
+dataALCityRent <- read.csv("dataALCityRent.csv",stringsAsFactors=FALSE)
+dataALStateRent<- read.csv("dataALStateRent.csv",stringsAsFactors=FALSE)
+dataFinance<- read.csv("dataFinance.csv",stringsAsFactors=FALSE)
+dataHomePriceIndex <- read.csv("dataHomePriceIndex.csv",stringsAsFactors=FALSE)
+dataCrime <- read.csv("dataCrime.csv",stringsAsFactors=FALSE)
+dataEarning <- read.csv("dataEarning.csv",stringsAsFactors=FALSE)
+
+```
+
+```{r time match, echo=FALSE}
+
+# Finance
+# Daily -> Monthly
+dataFinance$Date = as.Date(dataFinance$Date)
+dataFinanceMonth <- dataFinance%>% mutate(Year = year(Date), Month = month(Date) ) %>% 
+  group_by(Year,Month) %>% arrange(Date) %>% filter(row_number()==1) %>% 
+  mutate(Date = as.Date(paste(Year,Month,"01",sep = "-")))
+
+# Date Sequence
+dateSeq = unique(as.Date(c(dataRJCityRent$Date,dataALCityRent$Date,
+                           dataFinanceMonth$Date,dataHomePriceIndex$Date),orgin = "1970-01-01"))
+
+# Crime
+# Annually -> Monthly
+dateSeqCrime = tibble(Date = ymd(sort(dateSeq))) %>% 
+  filter(Date >= as.Date("2011-01-01"),Date <= as.Date("2017-01-01"))
+
+
+dataCrimeReduced <- dataCrime %>% mutate(MatchChar = paste(State,City, sep='@'),
+                                  Date = ymd(as.Date(paste(Year,"-01-01",sep="")))) %>%
+  select(MatchChar,Date, State,City,Population,ViolentCrime,Murder,LarcenyTheft) 
+dataCrimeMonthRaw <- expand.grid(c(lapply(dataCrimeReduced[1], unique), dateSeqCrime)) %>% 
+  left_join(., dataCrimeReduced) %>% arrange(MatchChar)
+
+dataCrimeMonthRaw <- dataCrimeMonthRaw %>% group_by(MatchChar) %>% 
+  mutate(AdjPopulation = round(na.approx(Population,na.rm = FALSE),digits=0), 
+         AdjViolentCrime = round(na.approx(ViolentCrime,na.rm = FALSE),digits=0),
+         AdjMurder = round(na.approx(Murder,na.rm = FALSE),digits=0),
+         AdjLarcenyTheft = round(na.approx(LarcenyTheft,na.rm = FALSE),digits=0))
+dataCrimeMonth<- dataCrimeMonthRaw %>% 
+  select(Date, MatchChar,AdjPopulation,AdjViolentCrime,AdjMurder,AdjLarcenyTheft) %>%
+  separate(MatchChar,c("State","City"),sep="@")
+
+#complete.cases(rawCrimeData$City)
+
+
+
+# Earning
+# Quarterly -> Monthly
+
+dateSeqEarn = tibble(Date = ymd(sort(dateSeq))) %>% filter(Date <= as.Date("2018-03-01"))
+
+
+dataEarning$year_time <- ymd(as.Date(dataEarning$year_time))
+dataEarningReduced <- dataEarning %>% 
+  mutate(county_fips = paste(formatC(state, width=2, flag="0"), formatC(county, width=3, flag="0"), sep="")) %>% select(county_fips,Date = year_time,EarnS,Payroll) 
+dataEarningMonthRaw <- expand.grid(c(lapply(dataEarningReduced[1], unique), dateSeqEarn)) %>% 
+  left_join(., dataEarningReduced) %>% arrange(county_fips)
+
+dataEarningMonth <- dataEarningMonthRaw %>% group_by(county_fips) %>% 
+  mutate(AdjEarnS = na.approx(EarnS,na.rm = FALSE), 
+         AdjPayroll = na.approx(Payroll,na.rm = FALSE)) %>%
+  select(Date, county_fips, AdjEarnS,AdjPayroll)
+
+
+```
+
+
+```{r location match, echo=FALSE}
+# CityLevel
+# Rent Jungle Rental Prices
+# Mapping with GeoInfo
+dataMappingGeo$city_modify<-  str_replace(dataMappingGeo$city_ascii,"Saint","St.")
+dataMappingGeo$state_modify<-  tolower(dataMappingGeo$state_name)
+dataRJCityRentGeo <- dataRJCityRent %>% 
+  inner_join(dataMappingGeo, by=c("State"="state_id", "City"="city_modify")) %>% 
+  select(Date, StateAbbr = State, State=state_name, City, CityID = X.y, 
+         CountyFips = county_fips, AllBeds, OneBed, TwoBeds)
+dataRJCityRentGeo$Date <- as.Date(dataRJCityRentGeo$Date)   
+
+# Apartment List Rental Prices
+# Mapping with GeoInfo
+dataALCityRentGeo <- dataALCityRent %>% 
+  inner_join(dataMappingGeo, by=c("State"="state_id", "City"="city_modify")) %>% 
+  select(Date, StateAbbr = State, State=state_name, City,CityID = X.y, 
+         CountyFips = county_fips,OneBed = X1br, TwoBeds = X2br, ThreeBeds = X3br,
+         FourBeds = X4br,Studio)
+dataALCityRentGeo$Date <- as.Date(dataALCityRentGeo$Date)
+
+cityIDUnion <- base::union(dataALCityRentGeo$CityID,dataRJCityRentGeo$CityID)
+
+
+# Crime
+# Mapping with GeoInfo
+dataCrimeMonthGeo <- dataCrimeMonth %>% 
+  inner_join(dataMappingGeo , by=c("State"="state_modify", "City"="city_modify")) %>% 
+  select(Date, StateAbbr = state_id, State=state_name, City,CityID = X, 
+         CountyFips = county_fips,AdjPopulation,AdjViolentCrime,AdjMurder,AdjLarcenyTheft)
+
+
+# Earning
+# Mapping with GeoInfo
+
+dataEarningMonthGeo <- dataMappingGeo %>% distinct(state_id,state_name,county_fips) %>% 
+  inner_join(dataEarningMonth) %>%  select(Date, StateAbbr = state_id, State=state_name,
+                                           CountyFips = county_fips, AdjEarnS, AdjPayroll)
+
+
+
+# Finance
+# National Level-> City Level  
+#dataALCityRentGeo %>% inner_join(dataFinanceMonth)
+
+
+# HomePrice
+# National Level-> City Level
+#dataHomePriceIndex$Date <- as.Date(dataHomePriceIndex$Date)
+#dataALCityRentGeo %>% inner_join(dataHomePriceIndex)
+```
+
+```{r combine, echo=FALSE}
+#Combine All DataSet
+dataHomePriceIndex$Date <- as.Date(dataHomePriceIndex$Date)
+# Rent Jungle
+dataRJCityRentAllRaw <- dataRJCityRentGeo %>% inner_join(dataFinanceMonth) %>% 
+  inner_join(dataHomePriceIndex, by = "Date") %>%
+  inner_join(dataCrimeMonthGeo, by = c("Date","StateAbbr","State","City","CityID","CountyFips")) %>%
+  inner_join(dataEarningMonthGeo, by = c("Date","StateAbbr","State","CountyFips")) %>%
+  select(Date,StateAbbr,State,City,CityID,CountyFips,AllBeds,OneBed,TwoBeds,SP500,InterestRate,
+         HomePriceIndex,AdjPopulation,AdjViolentCrime,AdjMurder,AdjLarcenyTheft, AdjEarnS, AdjPayroll)
+
+indexRJNA <- which(is.na(dataRJCityRentAllRaw), arr.ind=TRUE)
+indexRJCityIDRemove <-unique(dataRJCityRentAllRaw$CityID[indexRJNA[,1]]) 
+dataRJCityRentAll <- dataRJCityRentAllRaw %>% filter(!CityID %in% indexRJCityIDRemove)
+
+write.csv(dataRJCityRentAll,"dataRJCityRentAll.csv",row.names = FALSE)
+
+
+# Apartment List
+dataALCityRentAllRaw <- dataALCityRentGeo %>% inner_join(dataFinanceMonth) %>% 
+  inner_join(dataHomePriceIndex, by = "Date") %>%
+  inner_join(dataCrimeMonthGeo, by = c("Date","StateAbbr","State","City","CityID","CountyFips")) %>%
+  inner_join(dataEarningMonthGeo, by = c("Date","StateAbbr","State","CountyFips")) %>%
+  select(Date,StateAbbr,State,City,CityID,CountyFips,OneBed,TwoBeds,ThreeBeds, FourBeds,Studio,
+         SP500,InterestRate,HomePriceIndex,AdjPopulation,AdjViolentCrime,AdjMurder,AdjLarcenyTheft, 
+         AdjEarnS, AdjPayroll )
+
+indexALNA <- which(is.na(dataALCityRentAllRaw), arr.ind=TRUE)
+indexALCityIDRemove <-unique(dataALCityRentAllRaw$CityID[indexALNA[,1]]) 
+
+dataALCityRentAll <- dataALCityRentAllRaw %>% filter(!CityID %in% indexALCityIDRemove)
+
+write.csv(dataALCityRentAll,"dataALCityRentAll.csv", row.names = FALSE)
+
+
+
+```
+
+
+
+
+

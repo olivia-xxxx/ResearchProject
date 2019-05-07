@@ -1,0 +1,84 @@
+---
+title: " "
+author: "Wen Chen"
+date: "2019/5/6"
+output: html_document
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+
+library(tidyverse)
+library(rvest)
+library(dplyr)
+library(magrittr)
+library(stringr)
+library(tidytext)
+library(zoo)
+library(choroplethr)
+library(choroplethrMaps)
+#library(shiny)
+library(lubridate)
+library(broom)
+
+
+```
+
+
+
+
+```{r linear model, echo=FALSE}
+# Import Data
+dataRJCityRentAll <- read.csv("dataRJCityRentAll.csv",stringsAsFactors=FALSE)
+dataALCityRentAll <- read.csv("dataALCityRentAll.csv",stringsAsFactors=FALSE)
+
+# Function
+rentRJ_lm <- function(df){
+  #df$AllBeds = scale( df$AllBeds, center = TRUE, scale = TRUE)
+  #nameCol <- c("SP500","InterestRate","HomePriceIndex", "AdjPopulation","AdjViolentCrime","AdjMurder")
+  #df[, nameCol] <- df[, nameCol] %>% scale(center = TRUE, scale = TRUE)
+  lm(AllBeds ~ SP500+InterestRate+HomePriceIndex+AdjPopulation+AdjViolentCrime+AdjMurder +
+       AdjLarcenyTheft+ AdjEarnS + AdjPayroll, data = df)
+}
+
+rentAL_lm <- function(df){
+  df <- df %>% mutate(AvgPrice = rowMeans(cbind(OneBed,TwoBeds,ThreeBeds,FourBeds,Studio)))
+  lm(AvgPrice ~ SP500+InterestRate+HomePriceIndex+AdjPopulation+AdjViolentCrime+AdjMurder + 
+       AdjLarcenyTheft+ AdjEarnS + AdjPayroll, data = df)
+}
+
+top_sig<- function(df){
+  df$coefficients %>% as_tibble() %>% mutate(nameFactor = row.names(df$coefficients)) %>% filter(`Pr(>|t|)` < 0.05) %>% select(nameFactor)
+}
+
+adjR2 <- function(df){
+  df %>% select(adjR2 = `adj.r.squared`)
+}
+
+
+# Rent Jungle
+dataRJNest <- dataRJCityRentAll %>% group_by(StateAbbr,State,City,CityID,CountyFips) %>% nest()
+#dataRJNest$data[[1]] %>% glimpse()
+dataRJNest_lm <- dataRJNest %>% mutate(lm_fit = map(data, rentRJ_lm)) %>% 
+  mutate(lm_glance = map(lm_fit, glance)) %>%
+  mutate(lm_summary = map(lm_fit,summary)) %>% 
+  mutate(topFactor = map(lm_summary, top_sig)) %>%
+  mutate(AdjR2 = map(lm_glance, function (x) x$adj.r.squared))#%>% mutate(resid = map2(data, lm_fit, add_residuals))
+mean(unlist(dataRJNest_lm$AdjR2)) 
+unnest(dataRJNest_lm, topFactor) %>% ggplot(aes(x=nameFactor)) + 
+  geom_histogram(stat="count") + ggtitle("Rent Jungle: The Histogram of Significant Factors")
+
+# Apartment List
+dataALNest <- dataALCityRentAll %>% group_by(StateAbbr,State,City,CityID,CountyFips) %>% nest()
+#dataRJNest$data[[1]] %>% glimpse()
+dataALNest_lm <- dataALNest %>% mutate(lm_fit = map(data, rentAL_lm)) %>% 
+  mutate(lm_glance = map(lm_fit, glance)) %>%
+  mutate(lm_summary = map(lm_fit,summary)) %>% 
+  mutate(topFactor = map(lm_summary, top_sig)) %>% 
+  mutate(AdjR2 = map(lm_glance, function (x) x$adj.r.squared)) #%>% mutate(resid = map2(data, lm_fit, add_residuals))
+mean(unlist(dataALNest_lm$AdjR2)) 
+unnest(dataALNest_lm, topFactor) %>% ggplot(aes(x=nameFactor)) + 
+  geom_histogram(stat="count") + ggtitle("Apartment List: The Histogram of Significant Factors")
+
+
+```
