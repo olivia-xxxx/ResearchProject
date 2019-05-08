@@ -218,7 +218,8 @@ write.csv(dataCrime, "dataCrime.csv")
 
 ```{r qwi, echo = FALSE}
 # Quarterly Workforce Indicators (QWI)
-census_key = "5065d0c5c9218157d3b82ab59b1a35602e8e1e4f"
+source("apikey.R")
+# import census_key
 
 #Average Monthly Earnings
 #Total Quarterly Payroll
